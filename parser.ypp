@@ -1,0 +1,190 @@
+%{
+#include "bison_code.hpp"
+#include <algorithm> // for std::reverse
+#include <iostream>
+
+extern int yylex();
+extern int yylineno;
+int yyerror(const char* message);
+
+SymTable* symbol_table;
+Type last_exp;
+std::vector<bool> in_while;
+Type last_ret_type;
+std::string base_ptr;
+
+%}
+
+%union {
+  int int_val;
+  char* id_name;
+  char* string_val;
+  Type type;
+  bool override;
+  ExpInfo* exp_info;
+  ArgInfo* arg_info;
+  StatementInfo* statement_info;
+  std::vector<ArgInfo*>* arg_list;
+  std::vector<ExpInfo*>* exp_list;
+  char* label;
+}
+
+%token VOID INT BYTE B BOOL OVERRIDE
+%token TRUE FALSE RETURN IF WHILE BREAK
+%token CONTINUE SC COMMA
+
+%token<id_name> ID
+%token<int_val> NUM
+%token<string_val> STRING
+
+%left LBRACE RBRACE
+%right ASSIGN
+%left OR
+%left AND
+%left EQUAL NOT_EQUAL
+%left LESS_EQUAL GREATER_EQUAL GREATER LESS
+%left PLUS MINUS
+%left MUL DIV
+%right NOT
+
+/* solve dangling else by giving ELSE higher precedence than RRPAREN */
+%left LPAREN RPAREN
+%nonassoc ELSE
+
+%type<override> OverRide
+%type<type> Type RetType
+%type<exp_info> Exp Call
+%type<exp_list> ExpList
+%type<arg_info> FormalDecl
+%type<arg_list> FormalsList Formals
+%type<statement_info> Statements Statement N
+%type<label> Minst M
+
+%%
+
+Program   :    Funcs            {checkMain(symbol_table); delTopScope(symbol_table);}
+          ;
+
+Funcs     :    /* epsilon */    {}
+          |    FuncDecl Funcs   {}
+          ;
+
+FuncDecl  :    OverRide RetType ID LPAREN Formals RPAREN {int func_idx = addFunc(symbol_table,$3,$2,$5,$1); addFuncScope(symbol_table,$5); last_ret_type = $2; base_ptr = createFunc($3,$2,$5,func_idx);} LBRACE Statements RBRACE {closeFunc($2,$9); base_ptr.clear(); delTopScope(symbol_table);}
+          ;
+
+OverRide  :    /* epsilon */    {$$ = false;}
+          |    OVERRIDE         {$$ = true;}
+          ;
+
+RetType   :    Type             {$$ = $1;}
+          |    VOID             {$$ = VOID_TYPE;}
+          ;
+
+Formals   :    /* epsilon */    {$$ = nullptr;}
+          |    FormalsList      {$$ = $1; std::reverse($$->begin(), $$->end());}
+          ;
+
+FormalsList   :    FormalDecl                      {$$ = new std::vector<ArgInfo*>; $$->push_back($1);}
+              |    FormalDecl COMMA FormalsList    {$$ = $3; $$->push_back($1);}
+              ;
+
+FormalDecl    :    Type ID    {$$ = new ArgInfo(); $$->arg_name.assign($2); $$->arg_type = $1; $$->arg_line = yylineno;}
+              ;
+
+Statements    :    Statement                    {$$ = $1;}
+              |    Statements Minst Statement   {$$ = $3; statementAction($$,$1,$2);}
+              ;
+
+Statement     :    LBRACE {addScope(symbol_table);} Statements RBRACE {$$ = $3; delTopScope(symbol_table);}
+
+              |    Type ID SC                  {$$ = new StatementInfo(); handleVarDec(symbol_table,$2,$1); emitVarDec(symbol_table,$2,$1,nullptr,base_ptr);}
+
+              |    Type ID ASSIGN Exp SC       {$$ = new StatementInfo(); handleVarInitialization(symbol_table,$2,$1,$4->type); evalBoolExp($4); emitVarDec(symbol_table,$2,$1,$4,base_ptr);}
+
+              |    ID ASSIGN Exp SC            {$$ = new StatementInfo(); handleVarReassign(symbol_table,$1,$3->type); evalBoolExp($3); emitVarReassign(symbol_table,$1,$3,base_ptr);}
+
+              |    Call SC                     {$$ = new StatementInfo();}
+
+              |    RETURN SC                   {$$ = new StatementInfo(); checkEmptyRet(last_ret_type); emitRet(nullptr,last_ret_type);}
+              |    RETURN Exp SC               {$$ = new StatementInfo(); checkExpRet(last_ret_type,$2->type); evalBoolExp($2); emitRet($2,last_ret_type);}
+
+              |    IF LPAREN Exp RPAREN M Statement {$$ = new StatementInfo(); ifAction($$,$3,$5,$6); delTopScope(symbol_table);}
+
+              |    IF LPAREN Exp RPAREN M Statement ELSE N {delTopScope(symbol_table); addScope(symbol_table);} Minst Statement {$$ = new StatementInfo(); ifElseAction($$,$3,$5,$6,$8,$10,$11); delTopScope(symbol_table);}
+
+              |    WHILE Minst LPAREN Exp RPAREN M {in_while.push_back(true);} Statement {$$ = new StatementInfo(); whileAction($$,$2,$4,$6,$8); delTopScope(symbol_table); in_while.pop_back();}
+
+              |    BREAK SC                {$$ = new StatementInfo(); checkBreakInWhile(in_while); breakAction($$);}
+              |    CONTINUE SC             {$$ = new StatementInfo(); checkContinueInWhile(in_while); continueAction($$);}
+              ;
+
+M       :    /* epsilon */    {checkIfBool(last_exp); addScope(symbol_table); $$ = copyLabelStr();};
+
+N       :    /* epsilon */    {$$ = new StatementInfo(); N_Action($$);};
+
+Call    :    ID LPAREN ExpList RPAREN    {$$ = new ExpInfo(); assignPlace($$); std::reverse($3->begin(), $3->end()); callAction(symbol_table,$$,$1,$3);}
+        |    ID LPAREN RPAREN            {$$ = new ExpInfo(); assignPlace($$); callAction(symbol_table,$$,$1,nullptr);}
+        ;
+
+ExpList    :    Exp                        {$$ = new std::vector<ExpInfo*>; evalBoolExp($1); $$->push_back($1);}
+           |    Exp COMMA {evalBoolExp($1);} Minst ExpList    {$$ = $5; $$->push_back($1);}
+           ;
+
+Type    :    INT     {$$ = INT_TYPE;}
+        |    BYTE    {$$ = BYTE_TYPE;}
+        |    BOOL    {$$ = BOOL_TYPE;}
+        ;
+
+Exp    :    LPAREN Exp RPAREN        {$$ = $2; last_exp = $2->type;}
+       |    Exp DIV Exp              {$$ = new ExpInfo(); assignPlace($$); $$->type = last_exp = checkBinopExp($1->type,$3->type); emitBinary($$,$1,$3,"div");}
+       |    Exp MUL Exp              {$$ = new ExpInfo(); assignPlace($$); $$->type = last_exp = checkBinopExp($1->type,$3->type); emitBinary($$,$1,$3,"mul");}
+       |    Exp MINUS Exp            {$$ = new ExpInfo(); assignPlace($$); $$->type = last_exp = checkBinopExp($1->type,$3->type); emitBinary($$,$1,$3,"sub");}
+       |    Exp PLUS Exp             {$$ = new ExpInfo(); assignPlace($$); $$->type = last_exp = checkBinopExp($1->type,$3->type); emitBinary($$,$1,$3,"add");}
+
+       |    ID                       {$$ = new ExpInfo(); assignPlace($$); $$->type = last_exp = checkVarDeclaredBeforeUsed(symbol_table,$1); emitLoadCommand($$,symbol_table,$1,base_ptr);}
+
+       |    Call                     {$$ = $1; last_exp = $1->type; expCallAction($$);}
+
+       |    NUM                      {$$ = new ExpInfo(); assignPlace($$); $$->type = last_exp = INT_TYPE; emitNumToPlace($$->place,$1,INT_TYPE);}
+       |    NUM B                    {$$ = new ExpInfo(); assignPlace($$); $$->type = last_exp = checkByteVal($1); emitNumToPlace($$->place,$1,BYTE_TYPE);}
+       |    STRING                   {$$ = new ExpInfo(); assignPlace($$); $$->type = last_exp = STRING_TYPE; emitStrToGlobal($$,$1);}
+       |    TRUE                     {$$ = new ExpInfo(); $$->type = last_exp = BOOL_TYPE; boolAction($$,true);}
+       |    FALSE                    {$$ = new ExpInfo(); $$->type = last_exp = BOOL_TYPE; boolAction($$,false);}
+
+       |    NOT Exp                  {$$ = new ExpInfo(); $$->type = last_exp = checkIfBool($2->type); notAction($$,$2);}
+
+       |    Exp AND Minst Exp        {$$ = new ExpInfo(); $$->type = last_exp = checkLogicExp($1->type,$4->type); andAction($$,$1,$4,$3);}
+       |    Exp OR Minst Exp         {$$ = new ExpInfo(); $$->type = last_exp = checkLogicExp($1->type,$4->type); orAction($$,$1,$4,$3);}
+
+       |    Exp EQUAL Exp            {$$ = new ExpInfo(); $$->type = last_exp = checkRelopExp($1->type,$3->type); relopAction($$,$1,$3,"eq");}
+       |    Exp NOT_EQUAL Exp        {$$ = new ExpInfo(); $$->type = last_exp = checkRelopExp($1->type,$3->type); relopAction($$,$1,$3,"ne");}
+       |    Exp LESS_EQUAL Exp       {$$ = new ExpInfo(); $$->type = last_exp = checkRelopExp($1->type,$3->type); relopAction($$,$1,$3,"sle");}
+       |    Exp GREATER_EQUAL Exp    {$$ = new ExpInfo(); $$->type = last_exp = checkRelopExp($1->type,$3->type); relopAction($$,$1,$3,"sge");}
+       |    Exp GREATER Exp          {$$ = new ExpInfo(); $$->type = last_exp = checkRelopExp($1->type,$3->type); relopAction($$,$1,$3,"sgt");}
+       |    Exp LESS Exp             {$$ = new ExpInfo(); $$->type = last_exp = checkRelopExp($1->type,$3->type); relopAction($$,$1,$3,"slt");}
+
+       |    LPAREN Type RPAREN Exp   {$$ = new ExpInfo(); assignPlace($$); $$->type = last_exp = checkConversion($2,$4->type); conversionAction($$,$4,$2);}
+       ;
+
+Minst  :    /* epsilon */            {$$ = copyLabelStr();};
+
+%%
+
+int main() {
+    symbol_table = new SymTable();
+    std::vector<std::string> predefined_func = {"print", "printi"};
+
+    initSymTable(symbol_table, predefined_func);
+    initCodeBuff();
+
+	yyparse();
+
+	delete symbol_table;
+	printCodeBuff();
+}
+
+int yyerror(const char* message) {
+	output::errorSyn(yylineno);
+	exit(0);
+}
+
