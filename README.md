@@ -1,5 +1,5 @@
 # Compiler-LLVM-Code-Generator
-Theory of Compilation Course Spring 2023 HW5: LLVM Intermediate Code Generation
+Theory of Compilation Course HW5: LLVM Intermediate Code Generation
 
 • Translate C code into LLVM Intermediate Representation code using Backpatching for control flow structures
 
