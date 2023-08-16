@@ -1,4 +1,4 @@
-# Compiler-LLVM-Code-Generator
+# Compiler LLVM Code Generator
 Theory of Compilation Course HW5: LLVM Intermediate Code Generation
 
 • Translate C code into LLVM Intermediate Representation code using Backpatching for control flow structures
