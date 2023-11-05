@@ -1,8 +1,12 @@
-# Compiler LLVM Code Generator
-Theory of Compilation Course HW5: LLVM Intermediate Code Generation
+# C-Compiler
+Theory of Compilation Course: Implementing a full compiler for a C-like programming language.
 
-• Translate C code into LLVM Intermediate Representation code using Backpatching for control flow structures
+Includes all stages of the compiler:
 
-• The LLVM Intermediate Representation code is then converted to machine code by LLVM
+• Lexical Analyzer with Flex: recognizing tokens such as keywords, identifiers, and values
 
-• This repo contains the source files of all the previous compiler stages, to form the complete compiler
+• Bottom-up parser with Bison: recognizing statements and control flow structures
+
+• Semantic Analyzer: checking semantic correctness of statements like valid use of variables
+
+• LLVM Intermediate Code Generation: translating C code into LLVM Intermediate Representation code
